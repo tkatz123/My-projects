@@ -1,0 +1,370 @@
+# 2.1 Code here
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import folium
+from datetime import datetime
+from IPython.display import display, HTML
+from ipywidgets import interact_manual
+import ipywidgets as widgets
+import warnings
+
+#loads the data frame and deletes unecessary rows in order to make processing faster
+def load_and_clean_dataset(data1, data2):
+    arrests = pd.read_csv(data1, dtype={"ARREST_BORO": str}, nrows = 2000)
+    crashes = pd.read_csv(data2, dtype={"BOROUGH": str}, nrows= 2000)
+
+    borough_map = {
+        "K": "BROOKLYN",
+        "B": "BRONX",
+        "M": "MANHATTAN",
+        "Q": "QUEENS",
+        "S": "STATEN ISLAND"
+    }
+    #had to use maps because an apply function wouldnt work. 
+    #Asked a friend for help and they sent me this website which i used to learn how to use maps https://www.geeksforgeeks.org/python-map-function/
+    arrests['ARREST_BORO'] = arrests['ARREST_BORO'].map(borough_map) 
+    #deletes these columuns because they are mostly null and speed up processing without them 
+    crashes_columns_to_drop = [
+        'CONTRIBUTING FACTOR VEHICLE 3',
+        'CONTRIBUTING FACTOR VEHICLE 4', 'CONTRIBUTING FACTOR VEHICLE 5',
+        'VEHICLE TYPE CODE 3', 'VEHICLE TYPE CODE 4', 'VEHICLE TYPE CODE 5',
+    ]
+    
+    df_columns_to_drop = [
+        'PD_CD', 'KY_CD', 'LAW_CAT_CD', 'ARREST_BORO', 'JURISDICTION_CODE', 'X_COORD_CD', 'Y_COORD_CD' 
+    ]
+    
+    crashes.drop(columns=crashes_columns_to_drop, inplace=True, errors='ignore')
+    #merge dataframes using the common borough column
+    df = pd.merge(left=arrests, right=crashes, left_on='ARREST_BORO', right_on='BOROUGH')
+    
+    df.drop(columns=df_columns_to_drop, inplace=True, errors='ignore')
+    #rename certain coluumns that where similar for clarification
+    df = df.rename(columns={"Latitude": "crime.latitude", "Longitude": "crime.longitude",
+                            "LATITUDE": "crash.latitude", "LONGITUDE": "crash.longitude",
+                            "New Georeferenced Column": "crime.coordinates"
+                           })
+    #count variable used for graphing
+    df['count'] = 1
+    #takes only 2,000 rows from the dataframe. Original dataframe is over 2,000,000 rows 
+    df = df.sample(2000)
+    
+    return df
+#extracts day of week and month from the datestring using strptime library
+def get_day_of_week(datestring):
+    dow = datetime.strptime(datestring, "%m/%d/%Y").strftime("%A")
+    return dow
+assert get_day_of_week("11/01/2023") == "Wednesday"
+
+def get_month(datestring):
+    dow = datetime.strptime(datestring, "%m/%d/%Y").strftime("%B")
+    return dow
+assert get_month("11/01/2023") == "November"
+
+#Gets percentage likely hood of specific crime happening if a crime is commited in NYC
+def percent_of_crime_borough(borough, crime):
+    filtered_df = df[(df['BOROUGH'] == borough)]
+    #used mapping function again since it was giving me problems when i tried to use just value counts for percentages
+    #tutor helped me figure out this line of code 
+    filtered_df['Percentage_of_crime'] = filtered_df['OFNS_DESC'].map(filtered_df['OFNS_DESC'].value_counts(normalize=True))
+    filtered_df = df[(df['OFNS_DESC'] == crime)]
+    #filtered_df['Percentage_of_crime'] = filtered_df.apply(lambda row: (row['Percentage_of_crime'] * 100), axis=1)
+    percent = filtered_df['Percentage_of_crime'].iloc[0]
+    return percent
+#creates catagories of crimes based on the description of the crime. Column is used for graphiing later
+def create_catagories(crime: str) -> str:
+    catagory = ""
+    if(crime == "ROBBERY" or crime == "BURGLARY" or crime == "PETIT LARCENY" or crime == "GRAND LARCENY" 
+       or crime == "GRAND LARCENY OF MOTOR VEHICLE" or crime == "THEFT-FRAUD" or crime == "THEFT OF SERVICES" 
+       or crime == "POSSESSION OF STOLEN PROPERTY" or crime == "BURGLAR'S TOOLS" 
+       or crime == "OTHER OFFENSES RELATED TO THEF"
+    ):
+        catagory = "Theft offense"
+    elif(crime == "FELONY ASSAULT" or crime == "ASSAULT 3 & RELATED OFFENSES" or crime == "RAPE" 
+       or crime == "MURDER & NON-NEGL. MANSLAUGHTE" or crime == "KIDNAPPING & RELATED OFFENSES" 
+       or crime == "KIDNAPPING" or crime == "HOMICIDE-NEGLIGENT,UNCLASSIFIE" or crime == "HOMICIDE-NEGLIGENT-VEHICLE" 
+       or crime == "FELONY SEX CRIMES" or crime == "HARRASSMENT 2" or crime == "ARSON" or crime == "JOSTLING" 
+       or crime == "OFFENSES AGAINST THE PERSON"
+    ):
+        catagory = "Violent crime"
+    elif(crime == "DANGEROUS DRUGS" or crime == "INTOXICATED & IMPAIRED DRIVING" 
+         or crime == "INTOXICATED/IMPAIRED DRIVING" or crime == "ALCOHOLIC BEVERAGE CONTROL LAW" 
+         or crime == "CANNABIS RELATED OFFENSES"
+    ):
+        catagory = "Drug & alcohol crime"
+    elif(crime == "FORGERY" or crime == "FRAUDS" or crime == "OFFENSES INVOLVING FRAUD" 
+         or crime == "FRAUDULENT ACCOSTING" 
+    ):
+        catagory = "Fraud & deception offense"
+    elif(crime == "SEX CRIMES" or crime == "PROSTITUTION & RELATED OFFENSES"):
+        catagory = "Sexual offense"
+    elif(crime == "CRIMINAL TRESPASS" or crime == "MISCELLANEOUS PENAL LAW" 
+         or crime == "CRIMINAL MISCHIEF & RELATED OF" or crime == "OFFENSES AGAINST PUBLIC ADMINI" 
+         or crime == "OFFENSES AGAINST PUBLIC SAFETY" or crime == "DISORDERLY CONDUCT" 
+         or crime == "DISRUPTION OF A RELIGIOUS SERV" 
+    ):
+        catagory = "Public order & safety offense"
+    elif(crime == "VEHICLE AND TRAFFIC LAWS" or crime == "UNAUTHORIZED USE OF A VEHICLE" 
+         or crime == "OTHER TRAFFIC INFRACTION" or crime == "MOVING INFRACTIONS" 
+         or crime == "PARKING OFFENSES"
+    ):
+        catagory = "Traffic & vehicle offense"
+    elif(crime == "DANGEROUS WEAPONS" or crime == "UNLAWFUL POSS. WEAP. ON SCHOOL"):
+        catagory = "Weapon offense"
+    elif(crime == "OTHER STATE LAWS (NON PENAL LA" or crime == "OTHER STATE LAWS" 
+         or crime == "OFF. AGNST PUB ORD SENSBLTY &" or crime == "NYS LAWS-UNCLASSIFIED FELONY" 
+         or crime == "ADMINISTRATIVE CODE" or crime == "ADMINISTRATIVE CODES" 
+         or crime == "AGRICULTURE & MRKTS LAW-UNCLASSIFIED" or crime == "ESCAPE 3" or crime == "OTHER STATE LAWS" 
+         or crime == "FOR OTHER AUTHORITIES" or crime == "OTHER STATE LAWS (NON PENAL LAW)"
+    ):
+        catagory = "Legal & regulatory offense"
+    elif(crime == "OFFENSES RELATED TO CHILDREN" or crime == "GAMBLING" 
+         or crime == "ENDAN WELFARE INCOMP" or crime == "ANTICIPATORY OFFENSES" 
+         or crime == "CHILD ABANDONMENT/NON SUPPORT" 
+    ):
+        catagory = "Family & community offense"
+    else:
+        catagory = np.nan
+    return catagory
+
+assert create_catagories("GRAND LARCENY") == "Theft offense"
+assert create_catagories("KIDNAPPING") == "Violent crime"
+assert create_catagories("CANNABIS RELATED OFFENSES") == "Drug & alcohol crime"
+assert create_catagories("FORGERY") == "Fraud & deception offense"
+assert create_catagories("PROSTITUTION & RELATED OFFENSES") == "Sexual offense"
+assert create_catagories("OFFENSES AGAINST PUBLIC SAFETY") == "Public order & safety offense"
+assert create_catagories("MOVING INFRACTIONS") == "Traffic & vehicle offense"
+assert create_catagories("DANGEROUS WEAPONS") == "Weapon offense"
+assert create_catagories("OTHER STATE LAWS") == "Legal & regulatory offense"
+assert create_catagories("ENDAN WELFARE INCOMP") == "Family & community offense"
+
+#Coordinates obtained from https://www.latlong.net/
+def create_map(filtered_df, include_crashes, borough):
+    #only plotting 50 points in total to ensure kernal does not crash
+    if (len(filtered_df) > 50):
+        filtered_df = filtered_df.sample(50)
+    elif((include_crashes == "On") & (len(filtered_df) > 25)):
+        filtered_df = filtered_df.sample(25)
+    #setting starting view for map based on selected borough
+    map_coords = ""
+    if(borough == "*ANY*"):
+        map_coords = (40.712776, -74.005974)
+    elif(borough == "BRONX"):
+        map_coords = (40.844784, -73.864830)
+    elif(borough == "BROOKLYN"):
+        map_coords = (40.678177, -73.944160)
+    elif(borough == "MANHATTAN"):
+        map_coords = (40.783058, -73.971252)
+    elif(borough == "QUEENS"):
+        map_coords = (40.728226, -73.794853)
+    elif(borough == "STATEN ISLAND"):
+        map_coords = (40.579533, -74.150200)
+    #creates markers for map, if car crashes isn't selected it only makes markers for crimes, when it is selcted makes markers for both
+    city_map = folium.Map(location=map_coords, zoom_start=11)
+    if (include_crashes == "Off"):
+        if len(filtered_df['OFNS_DESC'].unique()) > 1:
+            print("Selected crime does not occur in borough, please try another crime or borough")
+        else:
+            for index, row in filtered_df.iterrows():
+                coords = (row['crime.latitude'], row['crime.longitude'])  
+                text = f"Crime: {row['OFNS_DESC']}, \n Catagory: {row['catagory_of_crime']}, \n Date: {row['ARREST_DATE']}, \n Sex of offender: {row['PERP_SEX']}, \n Race of offender: {row['PERP_RACE']}"
+                marker = folium.Marker(location=coords, popup=text)
+                marker.add_to(city_map)
+    elif(include_crashes == "On"):
+        #making sure selected crime was commited in borough
+        if len(filtered_df['OFNS_DESC'].unique()) > 1:
+            for index, row in filtered_df.iterrows():
+                coords = (row['crash.latitude'], row['crash.longitude'])  
+                text = f"Street: {row['ON STREET NAME']}, \n Number of people killed: {row['NUMBER OF PERSONS KILLED']}, \n Number of people injured: {row['NUMBER OF PERSONS INJURED']}, \n Collision ID: {row['COLLISION_ID']}"
+                marker = folium.Marker(location=coords, popup=text, icon=folium.Icon(color= 'red'))
+                marker.add_to(city_map)
+        else:
+            for index, row in filtered_df.iterrows():
+                coords = (row['crime.latitude'], row['crime.longitude'])  
+                text = f"Crime: {row['OFNS_DESC']}, \n Catagory: {row['catagory_of_crime']}, \n Date: {row['ARREST_DATE']}, \n Sex of offender: {row['PERP_SEX']}, \n Race of offender: {row['PERP_RACE']}"
+                marker = folium.Marker(location=coords, popup=text)
+                marker.add_to(city_map)
+            for index, row in filtered_df.iterrows():
+                coords = (row['crash.latitude'], row['crash.longitude'])  
+                text = f"Street: {row['ON STREET NAME']}, \n Number of people killed: {row['NUMBER OF PERSONS KILLED']}, \n Number of people injured: {row['NUMBER OF PERSONS INJURED']}, \n Collision ID: {row['COLLISION_ID']}"
+                marker = folium.Marker(location=coords, popup=text, icon=folium.Icon(color= 'red'))
+                marker.add_to(city_map)
+    display(city_map)
+
+#creates barplots based off user selection
+def create_barplot(filtered_df, catagory_df, df):
+    #making sure crime happens in borough
+    if len(filtered_df['OFNS_DESC'].unique()) > 1:
+        print("Selected crime does not occur in borough, please try another crime or borough")
+    else:
+        fig, ax = plt.subplots(1, 3, figsize=(15, 5)) #creates a frame for graphs 
+        graph1 = sns.barplot(data=catagory_df, x="count", y="OFNS_DESC", estimator="sum", ax=ax[0])
+        ax[0].set_title("Percent chance crime happens in borough compared to catagory")
+        graph2 = sns.barplot(data=df, x="count", y="catagory_of_crime", estimator="sum", hue = "BOROUGH", ax=ax[1])
+        ax[1].set_title("What type of crime is most likley in each borough")
+        graph3 = sns.barplot(data=df, x="NUMBER OF PERSONS KILLED", y="BOROUGH", estimator="sum", ax=ax[2])
+        ax[2].set_title("What borough traffic fatalities / injuries are most likely")
+        plt.tight_layout() #puts graphs next to eachother on frame
+        plt.show() #displays frame with graphs 
+        
+        '''
+        I couldnt figure out a way of displaying my graphs in a visually pleasing way so my tutor recomended i look
+        into the matplotlib library to format my graphs. I looked at the documentation and figured out how I could
+        display my graphs side by side. I used this link to figure it out https://matplotlib.org/stable/
+        '''
+#creares histograms also used matplotlib to format graphs 
+def create_histogram(filtered_df, df, time, crime, borough):
+    if len(filtered_df['OFNS_DESC'].unique()) > 1:
+        print("Selected crime does not occur in borough, please try another crime or borough")
+    else:
+        warnings.filterwarnings("ignore", category=UserWarning)
+        crashes_df = df[(df['Crash_occur'] == True)]
+        fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+        graph1 = sns.histplot(data=filtered_df, x=time, ax=ax[0])
+        ax[0].set_title(f"{crime} committed in {borough} over time")
+        ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=90) #used to rotate labels to make it easier to read
+        graph2 = sns.histplot(data=crashes_df, x=time, ax=ax[1])
+        ax[1].set_title(f"Crashes in {borough} over time")
+        ax[1].set_xticklabels(ax[1].get_xticklabels(), rotation=90)
+        plt.tight_layout()
+        plt.show()
+#creates a filterd dataframe of only entries matching the selected crime and borough
+def filter_dataframe(df, borough: str, crime: str):
+    filtered_df = pd.DataFrame()
+    if borough == "*ANY*":
+        filtered_df = df[(df['OFNS_DESC'] == crime)]
+    elif borough != "*ANY*":
+        filtered_df = df[(df['OFNS_DESC'] == crime) & (df['BOROUGH'] == borough)]
+        if len(filtered_df) == 0:
+            filtered_df = df[(df['BOROUGH'] == borough)]
+    return filtered_df
+
+#creates a new dataframe with only entries of matching catagories
+def catagory_dataframe(df, borough: str, crime: str): 
+    catagory_df = pd.DataFrame()
+    cat = create_catagories(crime)
+    catagory_df = df[(df['catagory_of_crime'] == cat) & (df['BOROUGH'] == borough)]
+    return catagory_df
+
+#used for creating a new row to determine if a car crash occured 
+def crash_occur(location):
+    if(type(location)) == str:
+        return True 
+    else:
+        return False
+#finds the most common catagory in selected borough
+def most_common_cat(df, borough):
+    most_common = ""
+    borough_df = df[(df['BOROUGH'] == borough)]
+    most_common = borough_df['catagory_of_crime'].mode()[0]
+    return most_common
+#finds the most common race and gender for a specific crime
+def common_race_and_gender(filtered_df):
+    most_common_race = filtered_df['PERP_RACE'].mode()[0]
+    most_common_gender = filtered_df['PERP_SEX'].mode()[0]
+    return most_common_race, most_common_gender
+#finds the most common day and month for a specific crime
+def common_day_and_month(filtered_df):
+    most_common_day = filtered_df['day of week'].mode()[0]
+    most_common_month = filtered_df['month'].mode()[0]
+    return most_common_day, most_common_month
+#determines which borough is the riskiest based on violant crimes and car crashes 
+def determine_riskiest_borough(df):
+    most_common_borough = df['BOROUGH'].mode()[0]
+    filtered_df = df[(df['BOROUGH'] == most_common_borough)]
+    crashes_df = filtered_df[(filtered_df['Crash_occur'] == True)]
+    num_crashes = len(crashes_df)
+    most_common_cat = filtered_df['catagory_of_crime'].mode()[0]
+    more_filtered_df = filtered_df[(filtered_df['catagory_of_crime'] == most_common_cat)]
+    percentages = more_filtered_df['Percent_of_crime_borough'].unique()
+    percent_total = 0
+    for num in percentages:
+        percent_total = percent_total + num
+    return most_common_borough, num_crashes, most_common_cat, percent_total
+
+#got from HW 11 used to make drop downs
+def dedupe_series(series: pd.Series) -> list[str]:
+    values = sorted(list(series.dropna().unique()))
+    values.insert(0, "*ANY*")
+    return values
+    
+
+    
+        
+
+
+#loading data and creating dataframe 
+data1 = "NYPD_Arrest_Data__Year_to_Date_.csv"
+data2 = "Motor_Vehicle_Collisions_-_Crashes.csv"
+
+df = load_and_clean_dataset(data1, data2)
+#using functions to create new colums for calculation
+df['day of week'] = df.apply(lambda row: get_day_of_week(row["ARREST_DATE"]), axis=1)
+df['month'] = df.apply(lambda row: get_month(row["ARREST_DATE"]), axis=1)
+df['Percentage_of_crime'] = df['OFNS_DESC'].map(df['OFNS_DESC'].value_counts(normalize=True))
+df['Percentage_of_crime'] = df.apply(lambda row: (row['Percentage_of_crime'] * 100), axis=1)
+'''
+this code is to find the likley hood of dying from car crashes, but I never ended up using that statistic.
+
+crashes = pd.read_csv("Motor_Vehicle_Collisions_-_Crashes.csv", dtype={"BOROUGH": str}, nrows= 2000)
+
+
+counted = crashes['NUMBER OF PERSONS KILLED'].value_counts(normalize=True)
+
+percent_of_fatality_crash = counted[1] * 100
+percent_of_fatality_crash = round(percent_of_fatality_crash, 4)
+'''
+
+#creates deduplicated lists for making drop down menus 
+boroughs = sorted(dedupe_series(df['BOROUGH']))
+crimes = sorted(dedupe_series(df['OFNS_DESC']))
+crashes = ['On', 'Off']
+times = ['day of week', 'month']
+
+del crimes[0]
+filtered_df = pd.DataFrame()
+catagory_df = pd.DataFrame()
+
+#making more columns using previously defined functions
+df['Percent_of_crime_borough'] = df.apply(lambda row: percent_of_crime_borough(row['BOROUGH'], row['OFNS_DESC']), axis=1)
+df['Crash_occur'] = df.apply(lambda row: crash_occur(row['LOCATION']), axis=1)
+df['Crash_occur'] = df.apply(lambda row: bool(row['Crash_occur']), axis=1)
+df['catagory_of_crime'] = df.apply(lambda row: create_catagories(row["OFNS_DESC"]), axis=1)
+
+#creating dropdowns
+boroughs_dropdown = widgets.Dropdown(options = boroughs, description = 'Boroughs')
+crimes_dropdown = widgets.Dropdown(options = crimes, description = 'Crimes')
+crashes_dropdown = widgets.Dropdown(options = crashes, description = 'Crashes')
+times_dropdown = widgets.Dropdown(options = times, description = 'Time frame')
+
+#final function gets desired inputs and creates graphs and a sumamry for all the data
+display(HTML(f"<h1>NYC borough risk analysis<h1>"))
+@interact_manual(borough = boroughs_dropdown, crime = crimes_dropdown, crash = crashes_dropdown, time = times_dropdown)
+def onclick(borough, crime, crash, time):
+    cat = create_catagories(crime)
+    display(HTML(f"<h1>{crime} is a {cat}<h1>"))
+    filtered_df = filter_dataframe(df, borough, crime)
+    catagory_df = catagory_dataframe(df, borough, crime)
+    try:
+        create_map(filtered_df, crash, borough)
+        display(HTML(f"<h1>Bar charts<h1>"))
+        create_barplot(filtered_df, catagory_df, df)
+        display(HTML(f"<h1>Histograms<h1>"))
+        create_histogram(filtered_df, df, time, crime, borough)
+        
+        display(HTML(f"<h1>Summary of data<h1>"))
+        chance = filtered_df.iloc[0, filtered_df.columns.get_loc("Percent_of_crime_borough")]
+        common_cat = most_common_cat(df, borough)
+        common_race, common_sex = common_race_and_gender(filtered_df)
+        common_day, common_month = common_day_and_month(filtered_df)
+        riskiest_borough, most_crashes, borough_common_cat, cat_percent = determine_riskiest_borough(df)
+        display(HTML(f"If a crime occurs in <strong>{borough}</strong> there is a <strong>{chance: .1f}%</strong> chance it was <strong>{crime}</strong>"))
+        display(HTML(f"If a crime occurs in <strong>{borough}</strong> it is most likley a <strong>{common_cat}</strong>"))
+        display(HTML(f"If  a <strong>{crime}</strong> was commited in <strong>{borough}</strong> it was most likely by <strong>{common_race} {common_sex}</strong>"))
+        display(HTML(f"If  a <strong>{crime}</strong> was commited in <strong>{borough}</strong> it was most likely in <strong>{common_month}</strong> on a <strong>{common_day}</strong>"))
+        display(HTML(f"<strong>{riskiest_borough}</strong> is the riskiest borough in NYC. The most common type of crime is <strong>{borough_common_cat}</strong> which has a <strong>{cat_percent: .0f}%</strong> chance of occuring. There where also <strong>{most_crashes}</strong> confirmed car crashes during 2023 in <strong>{riskiest_borough}</strong>"))
+    except:
+        print("Please select a differnt combination of boroughs and crimes")
+
